@@ -1,4 +1,4 @@
-"""Main entry point for GEPA/GEPA-MI experiments.
+"""Main entry point for GEPA/GEPA-MI/Self-Reflection experiments.
 
 Usage:
     python main.py --mode quick    # Quick test run
@@ -153,7 +153,7 @@ def main():
 
     start_time = time.time()
 
-    baseline_result, mi_result = run_cost_aware_benchmark(
+    baseline_result, mi_result, sr_result = run_cost_aware_benchmark(
         student=student,
         evaluator=evaluator,
         formatter=formatter,
@@ -182,11 +182,12 @@ def main():
     results_file = f"results/experiment_{args.mode}_{timestamp}.txt"
 
     with open(results_file, "w") as f:
-        f.write("GEPA vs GEPA-MI Experimental Results\n")
+        f.write("GEPA vs GEPA-MI vs Self-Reflection Experimental Results\n")
         f.write("=" * 80 + "\n\n")
 
         f.write(f"Mode: {args.mode}\n")
-        f.write(f"Model: {args.model}\n")
+        f.write(f"Provider: {args.provider}\n")
+        f.write(f"Model: {model_name}\n")
         f.write(f"Seed: {args.seed}\n")
         f.write(f"Total time: {total_time:.1f}s\n\n")
 
@@ -195,7 +196,7 @@ def main():
             f.write(f"  {key}: {value}\n")
         f.write("\n")
 
-        f.write("Baseline Results:\n")
+        f.write("GEPA Baseline Results:\n")
         f.write(f"  Method: {baseline_result.method}\n")
         f.write(f"  Wall time: {baseline_result.wall_time:.1f}s\n")
         f.write(f"  Pool size: {baseline_result.pool_size}\n")
@@ -213,6 +214,13 @@ def main():
         f.write(f"  Speedup: {mi_result.speedup:.2f}x\n")
         f.write(f"  Test accuracy: {mi_result.final_accuracy:.3f}\n\n")
 
+        f.write("Self-Reflection Results:\n")
+        f.write(f"  Method: {sr_result.method}\n")
+        f.write(f"  Wall time: {sr_result.wall_time:.1f}s\n")
+        f.write(f"  Iterations: {sr_result.iterations}\n")
+        f.write(f"  Total inference calls: {sr_result.total_inference_calls}\n")
+        f.write(f"  Test accuracy: {sr_result.final_accuracy:.3f}\n\n")
+
         f.write("Analysis:\n")
         if mi_result.speedup < 3.0:
             f.write("  ⚠️ Speedup < 3x (consider larger val set or higher k)\n")
@@ -223,6 +231,11 @@ def main():
                 - mi_result.total_validation_calls
             )
             f.write(f"  Saved {saved_calls} inference calls\n")
+
+        f.write("\nTest Accuracy Comparison:\n")
+        f.write(f"  GEPA Baseline:    {baseline_result.final_accuracy:.3f}\n")
+        f.write(f"  GEPA-MI:          {mi_result.final_accuracy:.3f}\n")
+        f.write(f"  Self-Reflection:  {sr_result.final_accuracy:.3f}\n")
 
     print(f"✓ Results saved to: {results_file}")
     print("\n" + "=" * 80)

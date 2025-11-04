@@ -1,7 +1,7 @@
-"""Benchmarking infrastructure for comparing GEPA baseline vs GEPA-MI.
+"""Benchmarking infrastructure for comparing optimization methods.
 
 This module provides utilities for:
-- Running both methods
+- Running GEPA baseline, GEPA-MI, and Self-Reflection
 - Tracking costs and wall time
 - Evaluating final test accuracy
 - Comparing speedup
@@ -14,6 +14,7 @@ from typing import Dict, List, Any, Tuple
 from .core import StudentModel, TaskEvaluator, TrajectoryFormatter
 from .gepa_baseline import gepa_baseline, Candidate
 from .gepa_mi import gepa_mi
+from .self_reflection import run_self_reflection
 
 
 @dataclass
@@ -106,9 +107,9 @@ def run_cost_aware_benchmark(
     delta_init: float = 0.05,
     delta_final: float = 0.02,
     verbose: bool = True,
-) -> Tuple[BenchmarkResult, BenchmarkResult]:
+) -> Tuple[BenchmarkResult, BenchmarkResult, BenchmarkResult]:
     """
-    Run both methods and compare.
+    Run all three methods and compare.
 
     Args:
         student: Student model
@@ -127,7 +128,7 @@ def run_cost_aware_benchmark(
         verbose: Print progress
 
     Returns:
-        (baseline_result, mi_result)
+        (baseline_result, mi_result, self_reflection_result)
     """
 
     if verbose:
@@ -270,6 +271,51 @@ def run_cost_aware_benchmark(
     )
 
     # ============================================================
+    # SELF-REFLECTION
+    # ============================================================
+    if verbose:
+        print("\n" + ">" * 80)
+        print("RUNNING SELF-REFLECTION")
+        print(">" * 80 + "\n")
+
+    t0 = time.time()
+    sr_result_dict = run_self_reflection(
+        student=student,
+        evaluator=evaluator,
+        formatter=formatter,
+        probe_set=probe_set,
+        inference_config=inference_config,
+        time_budget_s=time_budget_s,
+        batch_size=batch_size,
+        self_consistency_k=self_consistency_k,
+        verbose=verbose,
+    )
+    t_sr = time.time() - t0
+
+    # Evaluate best prompt on test set
+    test_acc_sr = evaluate_on_split(
+        student,
+        evaluator,
+        sr_result_dict["best_prompt_config"],
+        test_set,
+        inference_config,
+        self_consistency_k,
+    )
+
+    sr_result = BenchmarkResult(
+        method="Self-Reflection",
+        wall_time=t_sr,
+        pool_size=len(sr_result_dict["history"]),  # Number of prompts tried
+        total_inference_calls=sr_result_dict["total_inference_calls"],
+        total_validation_calls=0,  # No validation set used
+        avg_probes_per_candidate=0,  # Not applicable
+        speedup=0,  # Not applicable (no validation)
+        final_accuracy=test_acc_sr,
+        iterations=sr_result_dict["iterations"],
+        accepted_candidates=sr_result_dict["iterations"],  # All iterations accepted
+    )
+
+    # ============================================================
     # REPORT
     # ============================================================
     if verbose:
@@ -293,6 +339,12 @@ def run_cost_aware_benchmark(
         print(f"  Speedup: {mi_result.speedup:.2f}x")
         print(f"  Test accuracy: {mi_result.final_accuracy:.3f}")
 
+        print(f"\n{sr_result.method}:")
+        print(f"  Wall time: {sr_result.wall_time:.1f}s")
+        print(f"  Iterations: {sr_result.iterations}")
+        print(f"  Total inference calls: {sr_result.total_inference_calls}")
+        print(f"  Test accuracy: {sr_result.final_accuracy:.3f}")
+
         print("\n" + "=" * 80)
         print("SPEEDUP ANALYSIS")
         print("=" * 80)
@@ -309,6 +361,18 @@ def run_cost_aware_benchmark(
                 f"inference calls"
             )
 
+        print("\n" + "=" * 80)
+        print("METHOD COMPARISON")
+        print("=" * 80)
+        print(f"\nTest Accuracy:")
+        print(f"  GEPA Baseline:    {baseline_result.final_accuracy:.3f}")
+        print(f"  GEPA-MI:          {mi_result.final_accuracy:.3f}")
+        print(f"  Self-Reflection:  {sr_result.final_accuracy:.3f}")
+        print(f"\nInference Efficiency:")
+        print(f"  GEPA Baseline:    {baseline_result.total_inference_calls} calls")
+        print(f"  GEPA-MI:          {mi_result.total_inference_calls} calls ({mi_result.speedup:.1f}x faster)")
+        print(f"  Self-Reflection:  {sr_result.total_inference_calls} calls (no validation)")
+
         print("\n" + "=" * 80 + "\n")
 
-    return baseline_result, mi_result
+    return baseline_result, mi_result, sr_result

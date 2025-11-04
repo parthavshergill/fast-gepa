@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Tuple
 
 from .core import StudentModel, TaskEvaluator, TrajectoryFormatter
+from .reflection import ReflectionEngine
 
 
 @dataclass
@@ -32,6 +33,7 @@ def gepa_baseline(
     batch_size: int,
     inference_config: Dict[str, Any],
     self_consistency_k: int = 1,
+    use_reflection: bool = False,
     verbose: bool = True,
 ) -> Tuple[List[Candidate], Dict, Dict]:
     """
@@ -40,13 +42,14 @@ def gepa_baseline(
     Args:
         student: Student model to optimize
         evaluator: Task evaluator
-        formatter: Trajectory formatter (unused in baseline, for interface compatibility)
+        formatter: Trajectory formatter
         probe_set: For minibatch probing
         val_set: For Pareto frontier (should be large, 300-800 for GSM8K)
         time_budget_s: Time budget in seconds
         batch_size: Minibatch size
         inference_config: Sampling parameters
         self_consistency_k: Number of samples for self-consistency
+        use_reflection: Use ReflectionEngine for mutations (default: False, uses random hints)
         verbose: Print progress
 
     Returns:
@@ -74,6 +77,9 @@ def gepa_baseline(
     P = [Candidate(prompt_config=seed_config)]
     Best = {i: 0.0 for i in range(len(val_set))}
     Scores = {}  # Sparse: (candidate_id, instance_idx) -> score
+
+    # Initialize ReflectionEngine if requested
+    reflection_engine = ReflectionEngine(student, formatter) if use_reflection else None
 
     start = time.time()
     iteration = 0
@@ -110,19 +116,34 @@ def gepa_baseline(
 
         parent_acc = sum(r.success for r in batch_results) / len(batch_results)
 
-        # (3) Reflect and mutate (simplified: just add variation)
-        # TODO: Replace with actual reflection LLM call
-        child_config = parent.prompt_config.copy()
-        # Simple mutation: add a hint
-        variations = [
-            "Focus on identifying the key numbers and operations.",
-            "Break down the problem into smaller steps.",
-            "Check your arithmetic carefully.",
-            "Make sure to show all intermediate calculations.",
-            "Verify your answer makes sense in the context.",
-        ]
-        hint = random.choice(variations)
-        child_config["cot_prompt"] = parent.prompt_config["cot_prompt"] + f" {hint}"
+        # (3) Reflect and mutate
+        if use_reflection and reflection_engine:
+            # Collect failures for reflection
+            failed_trajectories = []
+            for i, result in enumerate(batch_results):
+                if not result.success:
+                    # Use first trajectory if self-consistency was used
+                    traj = result.trajectory
+                    failed_trajectories.append((traj, batch[i]))
+
+            # Use ReflectionEngine to generate mutation
+            child_config = reflection_engine.reflect_and_mutate(
+                parent_config=parent.prompt_config,
+                failed_trajectories=failed_trajectories,
+                inference_config=inference_config
+            )
+        else:
+            # Fallback: random hint mutation
+            child_config = parent.prompt_config.copy()
+            variations = [
+                "Focus on identifying the key numbers and operations.",
+                "Break down the problem into smaller steps.",
+                "Check your arithmetic carefully.",
+                "Make sure to show all intermediate calculations.",
+                "Verify your answer makes sense in the context.",
+            ]
+            hint = random.choice(variations)
+            child_config["cot_prompt"] = parent.prompt_config["cot_prompt"] + f" {hint}"
 
         child = Candidate(prompt_config=child_config)
 

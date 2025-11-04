@@ -1,7 +1,10 @@
-# GEPA & GEPA-MI Implementation Plan
+# GEPA, GEPA-MI & Self-Reflection Implementation Plan
 
 ## Objective
-Implement and benchmark GEPA (Genetic-Pareto prompt optimization) and GEPA-MI (with Mutual Information-guided selective validation) on GSM8K math problems.
+Implement and benchmark three prompt optimization methods on GSM8K math problems:
+- GEPA (Genetic-Pareto with full validation)
+- GEPA-MI (with Mutual Information-guided selective validation)
+- Self-Reflection (simple iterative refinement baseline)
 
 ## Status: IMPLEMENTATION COMPLETE → READY FOR EXPERIMENTS
 
@@ -83,7 +86,30 @@ Implement and benchmark GEPA (Genetic-Pareto prompt optimization) and GEPA-MI (w
 - [x] Create README.md
 - [x] Create .env.example
 
-## Phase 9: Initial Experimental Run 🧪 ⬅️ NEXT
+## Phase 9: Self-Reflection Baseline ✅
+- [x] Implement ReflectionEngine class:
+  - [x] Format failed trajectories
+  - [x] Build reflection prompt
+  - [x] Call LLM for analysis
+  - [x] Parse structured suggestions (ANALYSIS/IMPROVEMENT/TARGET)
+  - [x] Apply mutations with graceful fallback
+- [x] Implement Self-Reflection algorithm:
+  - [x] Simple iterative refinement (no validation, no pool)
+  - [x] Probe → evaluate → reflect → mutate loop
+  - [x] Track best prompt by probe accuracy
+- [x] Integrate into benchmarking:
+  - [x] Update run_cost_aware_benchmark to run three methods
+  - [x] Return three BenchmarkResult objects
+  - [x] Add comparison metrics
+- [x] Update main.py to handle three methods
+- [x] Update documentation:
+  - [x] README.md with algorithm descriptions
+  - [x] IMPLEMENTATION_NOTES.md with design rationale
+  - [x] plan.md with phase completion
+- [x] Create src/reflection.py
+- [x] Create src/self_reflection.py
+
+## Phase 10: Initial Experimental Run 🧪 ⬅️ NEXT
 - [ ] Set up OpenAI API key
 - [ ] Run with minimal settings first (quick validation):
   - [ ] Smaller val set (100)
@@ -92,19 +118,24 @@ Implement and benchmark GEPA (Genetic-Pareto prompt optimization) and GEPA-MI (w
 - [ ] Debug any issues
 - [ ] Verify basic functionality
 
-## Phase 10: Full Experimental Run 🚀
+## Phase 11: Full Experimental Run 🚀
 - [ ] Run with proper settings:
   - [ ] Val set: 600
   - [ ] Self-consistency k: 8
   - [ ] Time budget: 600s (10 min)
   - [ ] Max probes: 10
-- [ ] Collect results
+- [ ] Collect results for all three methods
 - [ ] Analyze speedup
+- [ ] Compare reflection vs random mutation
 - [ ] Generate report
 
-## Phase 11: Analysis & Documentation 📊
-- [ ] Compare baseline vs GEPA-MI
-- [ ] Validate speedup expectations (5-15x)
+## Phase 12: Analysis & Documentation 📊
+- [ ] Compare all three methods:
+  - [ ] GEPA Baseline (full validation)
+  - [ ] GEPA-MI (selective validation + speedup)
+  - [ ] Self-Reflection (no validation + overfitting risk)
+- [ ] Validate speedup expectations (5-15x for GEPA-MI)
+- [ ] Analyze reflection effectiveness
 - [ ] Document findings
 - [ ] Create results.md
 
@@ -116,6 +147,9 @@ Implement and benchmark GEPA (Genetic-Pareto prompt optimization) and GEPA-MI (w
 3. ✅ Implement GEPA baseline and GEPA-MI algorithms
 4. ✅ Add benchmarking infrastructure and main entry point
 5. ✅ Add documentation and environment configuration
+6. ✅ Add detailed implementation notes and simplifications
+7. ✅ Add Google Gemini API support as default provider
+8. ✅ Implement Self-Reflection baseline with ReflectionEngine
 
 ---
 
@@ -131,6 +165,8 @@ Implement and benchmark GEPA (Genetic-Pareto prompt optimization) and GEPA-MI (w
 fast-gepa/
 ├── plan.md                 # This file
 ├── requirements.txt        # Dependencies
+├── README.md               # User documentation
+├── IMPLEMENTATION_NOTES.md # Technical deep-dive
 ├── src/
 │   ├── __init__.py
 │   ├── core.py            # Base interfaces
@@ -138,7 +174,9 @@ fast-gepa/
 │   ├── data_utils.py      # Data loading
 │   ├── gepa_baseline.py   # Baseline GEPA
 │   ├── gepa_mi.py         # GEPA-MI
-│   └── benchmark.py       # Benchmarking
+│   ├── reflection.py      # ReflectionEngine
+│   ├── self_reflection.py # Self-Reflection algorithm
+│   └── benchmark.py       # Benchmarking (all 3 methods)
 ├── main.py                # Main entry point
 └── results/               # Experimental results
 ```
@@ -154,4 +192,12 @@ fast-gepa/
 ---
 
 ## Current Focus
-**Next Step**: Phase 1 - Project Setup
+**Current Phase**: Phase 9 - Self-Reflection Baseline ✅ COMPLETE
+**Next Step**: Phase 10 - Initial Experimental Run 🧪
+
+All three methods are now implemented and integrated:
+- ✅ GEPA Baseline with full validation
+- ✅ GEPA-MI with selective validation and speedup
+- ✅ Self-Reflection with ReflectionEngine for iterative refinement
+
+Ready to run experiments and compare all three approaches!

@@ -1,10 +1,13 @@
-# GEPA & GEPA-MI: Efficient Prompt Optimization
+# GEPA, GEPA-MI & Self-Reflection: Prompt Optimization
 
-Implementation of GEPA (Genetic-Pareto) and GEPA-MI (with Mutual Information-guided selective validation) for efficient prompt optimization on GSM8K math problems.
+Implementation of three prompt optimization methods for GSM8K math problems:
+- **GEPA Baseline**: Genetic-Pareto with full validation
+- **GEPA-MI**: Bayesian mutual information-guided selective validation
+- **Self-Reflection**: Simple iterative refinement baseline
 
 ## Overview
 
-**GEPA** is a prompt optimizer that uses natural language reflection to learn from trial and error, maintaining a Pareto frontier of candidates. **GEPA-MI** extends this with Bayesian inference to reduce validation cost by 5-50x through selective probing.
+**GEPA** is a prompt optimizer that maintains a Pareto frontier of candidates, using mutation to explore prompt variations. **GEPA-MI** extends this with Bayesian inference to reduce validation cost by 5-50x through selective probing. **Self-Reflection** provides a simpler baseline using iterative refinement without validation.
 
 ### Key Innovation
 
@@ -23,6 +26,8 @@ fast-gepa/
 │   ├── data_utils.py        # Data loading and splitting
 │   ├── gepa_baseline.py     # GEPA with full validation
 │   ├── gepa_mi.py           # GEPA-MI with selective validation
+│   ├── reflection.py        # ReflectionEngine for prompt improvement
+│   ├── self_reflection.py   # Self-Reflection algorithm
 │   └── benchmark.py         # Benchmarking infrastructure
 ├── main.py                  # Main entry point
 ├── requirements.txt         # Dependencies
@@ -153,25 +158,51 @@ For this experiment with ~1000-1500 total inference calls (quick mode) or ~10000
 
 ## Expected Results
 
+The benchmark runs all three methods and compares their performance.
+
 ### Quick Mode
 - **Purpose:** Verify implementation works
-- **Expected speedup:** ~2-3x (val set too small)
-- **Runtime:** ~2-3 minutes total
+- **GEPA-MI speedup:** ~2-3x (val set too small for real speedup)
+- **Runtime:** ~3-5 minutes total (all three methods)
 
 ### Full Mode
-- **Purpose:** Demonstrate real speedup
-- **Expected speedup:** 5-15x
-- **Runtime:** ~20-30 minutes total (depends on API speed)
+- **Purpose:** Demonstrate real speedup and compare approaches
+- **GEPA-MI speedup:** 5-15x over GEPA Baseline
+- **Self-Reflection:** Cheaper per iteration (no validation), may overfit
+- **Runtime:** ~30-45 minutes total (depends on API speed)
 
 ### Key Metrics
 
-The benchmark reports:
-- **Wall time**: Total execution time
-- **Pool size**: Number of Pareto-optimal candidates
-- **Validation calls**: Total inference calls made
-- **Avg probes/candidate**: Average instances probed per candidate (GEPA-MI)
-- **Speedup**: Validation call reduction (baseline calls / MI calls)
-- **Test accuracy**: Final accuracy on held-out test set
+The benchmark reports for each method:
+
+**GEPA Baseline:**
+- Wall time, pool size, validation calls
+- Test accuracy on held-out set
+
+**GEPA-MI:**
+- Wall time, avg probes/candidate
+- Speedup vs baseline
+- Test accuracy
+
+**Self-Reflection:**
+- Wall time, iterations completed
+- Total inference calls (no validation)
+- Test accuracy
+
+### Method Comparison
+
+**GEPA Baseline:**
+- Full validation (expensive but thorough)
+- Pareto pool diversity
+
+**GEPA-MI:**
+- Selective validation (5-15x cheaper)
+- Same pool diversity as baseline
+
+**Self-Reflection:**
+- No validation (cheapest per iteration)
+- Single trajectory (no pool)
+- Risk of overfitting to probe set
 
 ## When GEPA-MI Shows Speedup
 
@@ -221,13 +252,26 @@ All components implement clean interfaces:
    - Stop early when P(Z=1) crosses threshold
 6. Add to pool if accepted
 
+**Self-Reflection:**
+1. Sample batch from probe set
+2. Evaluate with self-consistency
+3. Collect failed trajectories
+4. Use ReflectionEngine to analyze failures:
+   - Format failures with context
+   - Ask LLM to suggest improvements
+   - Parse structured suggestions (ANALYSIS/IMPROVEMENT/TARGET)
+   - Apply mutation to prompt
+5. Track best prompt by probe accuracy
+6. Repeat until time budget exhausted
+
 ## Results Location
 
 Results are saved to `results/experiment_{mode}_{timestamp}.txt` with:
-- Configuration
-- Baseline metrics
-- GEPA-MI metrics
-- Speedup analysis
+- Configuration (model, seed, parameters)
+- GEPA Baseline metrics
+- GEPA-MI metrics and speedup
+- Self-Reflection metrics
+- Method comparison (test accuracy, inference calls)
 
 ## Citation
 
