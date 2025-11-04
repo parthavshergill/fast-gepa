@@ -46,6 +46,24 @@ uv pip install -r requirements.txt
 
 ### 3. Configure API key
 
+The implementation supports both **Google Gemini** (default) and **OpenAI** models.
+
+#### Option A: Using Gemini (Recommended - Free Tier Available)
+
+Get a free API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+
+```bash
+cp .env.example .env
+# Edit .env and add your Gemini API key
+```
+
+Or set environment variable:
+```bash
+export GEMINI_API_KEY="your_api_key_here"
+```
+
+#### Option B: Using OpenAI
+
 ```bash
 cp .env.example .env
 # Edit .env and add your OpenAI API key
@@ -62,8 +80,14 @@ export OPENAI_API_KEY="your_api_key_here"
 
 Run a quick test to verify everything works:
 
+**Using Gemini (default):**
 ```bash
 python main.py --mode quick
+```
+
+**Using OpenAI:**
+```bash
+python main.py --mode quick --provider openai
 ```
 
 **Configuration:**
@@ -76,8 +100,14 @@ python main.py --mode quick
 
 Run the full benchmark with proper settings for speedup:
 
+**Using Gemini:**
 ```bash
 python main.py --mode full
+```
+
+**Using OpenAI:**
+```bash
+python main.py --mode full --provider openai
 ```
 
 **Configuration:**
@@ -88,9 +118,38 @@ python main.py --mode full
 
 ### Custom Options
 
+**Specify a different model:**
 ```bash
-python main.py --mode full --model gpt-4o-mini --seed 42
+# Gemini models
+python main.py --mode full --model gemini-1.5-pro
+python main.py --mode full --model gemini-2.0-flash-exp
+
+# OpenAI models
+python main.py --mode full --provider openai --model gpt-4o-mini
+python main.py --mode full --provider openai --model gpt-4o
+
+# With custom seed
+python main.py --mode full --seed 42
 ```
+
+### Available Models
+
+**Gemini Models (Default - Free Tier):**
+- `gemini-1.5-flash` (default) - Fast and efficient
+- `gemini-1.5-pro` - More capable, slower
+- `gemini-2.0-flash-exp` - Experimental, latest features
+
+**OpenAI Models (Paid):**
+- `gpt-4o-mini` (default for OpenAI) - Cost-effective
+- `gpt-4o` - Most capable
+- `gpt-4-turbo` - Balanced performance
+
+**Cost Comparison (Approximate):**
+- **Gemini 1.5 Flash**: FREE (60 RPM, 1M TPM limit)
+- **GPT-4o-mini**: ~$0.15 per 1M input tokens, ~$0.60 per 1M output tokens
+- **GPT-4o**: ~$2.50 per 1M input tokens, ~$10 per 1M output tokens
+
+For this experiment with ~1000-1500 total inference calls (quick mode) or ~10000-15000 calls (full mode), Gemini is free while OpenAI would cost $5-50 depending on the model.
 
 ## Expected Results
 

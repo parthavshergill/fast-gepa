@@ -10,7 +10,12 @@ import argparse
 import time
 from dotenv import load_dotenv
 
-from src.gsm8k_components import GSM8KFormatter, GSM8KEvaluator, OpenAIStudentModel
+from src.gsm8k_components import (
+    GSM8KFormatter,
+    GSM8KEvaluator,
+    OpenAIStudentModel,
+    GeminiStudentModel,
+)
 from src.data_utils import load_gsm8k_splits, verify_data_quality
 from src.benchmark import run_cost_aware_benchmark
 
@@ -26,16 +31,23 @@ def main():
         help="Experiment mode: 'quick' for fast validation, 'full' for complete benchmark",
     )
     parser.add_argument(
+        "--provider",
+        type=str,
+        choices=["openai", "gemini"],
+        default="gemini",
+        help="LLM provider: 'openai' or 'gemini' (default: gemini)",
+    )
+    parser.add_argument(
         "--api-key",
         type=str,
         default=None,
-        help="OpenAI API key (or set OPENAI_API_KEY env var)",
+        help="API key (or set OPENAI_API_KEY or GEMINI_API_KEY env var)",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o-mini",
-        help="OpenAI model to use",
+        default=None,
+        help="Model name (default: gpt-4o-mini for OpenAI, gemini-1.5-flash for Gemini)",
     )
     parser.add_argument(
         "--seed",
@@ -100,11 +112,26 @@ def main():
     print("INITIALIZING COMPONENTS")
     print("=" * 80)
 
-    student = OpenAIStudentModel(model_name=args.model, api_key=args.api_key)
+    # Determine model name if not specified
+    if args.model is None:
+        if args.provider == "openai":
+            model_name = "gpt-4o-mini"
+        else:  # gemini
+            model_name = "gemini-1.5-flash"
+    else:
+        model_name = args.model
+
+    # Initialize student model based on provider
+    if args.provider == "openai":
+        student = OpenAIStudentModel(model_name=model_name, api_key=args.api_key)
+    else:  # gemini
+        student = GeminiStudentModel(model_name=model_name, api_key=args.api_key)
+
     evaluator = GSM8KEvaluator()
     formatter = GSM8KFormatter()
 
-    print(f"✓ Student model: {args.model}")
+    print(f"✓ Provider: {args.provider}")
+    print(f"✓ Student model: {model_name}")
     print(f"✓ Evaluator: GSM8KEvaluator")
     print(f"✓ Formatter: GSM8KFormatter")
 
