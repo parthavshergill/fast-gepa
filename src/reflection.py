@@ -4,12 +4,20 @@ Reflection engine for prompt improvement via self-reflection.
 This module provides a reusable reflection mechanism that can be used
 by any optimization algorithm (GEPA, Self-Reflection, etc.) to improve
 prompts by analyzing failed trajectories.
+
+Uses strict Pydantic types and structured outputs - no string parsing.
 """
 
-import random
-from typing import Dict, List, Tuple, Any
+from typing import List, Tuple
 
-from .core import AgentTrajectory, StudentModel, TrajectoryFormatter
+from .core import StudentModel
+from .types import (
+    ReflectionOutput,
+    MathSolution,
+    GSM8KProblem,
+    PromptConfig,
+    InferenceConfig,
+)
 
 
 class ReflectionEngine:
@@ -18,83 +26,109 @@ class ReflectionEngine:
 
     Uses the same LLM (student model) as both the problem solver and the
     judge/reflector, providing a simple baseline for prompt optimization.
+
+    Now uses strict Pydantic types with instructor for structured outputs.
     """
 
-    def __init__(self, student: StudentModel, formatter: TrajectoryFormatter):
+    def __init__(self, student: StudentModel):
         """
         Initialize reflection engine.
 
         Args:
-            student: The student model to use for reflection
-            formatter: Formatter to convert trajectories to natural language
+            student: The student model to use for reflection (must support instructor)
         """
         self.student = student
-        self.formatter = formatter
+        self._setup_instructor_client()
+
+    def _setup_instructor_client(self):
+        """Setup instructor-wrapped client from the student model."""
+        import instructor
+
+        # Check if student model has instructor-compatible client
+        if hasattr(self.student, 'client'):
+            # Wrap existing client with instructor if not already wrapped
+            if not hasattr(self.student.client, 'chat'):
+                # Need to determine provider type and wrap accordingly
+                # This is a simplified approach - in production, student model
+                # should already provide instructor-wrapped client
+                self.instructor_client = instructor.patch(self.student.client)
+            else:
+                # Assume it's already compatible with instructor
+                self.instructor_client = instructor.patch(self.student.client)
+        else:
+            raise ValueError(
+                "Student model must have a 'client' attribute compatible with instructor"
+            )
 
     def reflect_and_mutate(
         self,
-        parent_config: Dict[str, str],
-        failed_trajectories: List[Tuple[AgentTrajectory, Dict]],
-        inference_config: Dict[str, Any]
-    ) -> Dict[str, str]:
+        parent_config: PromptConfig,
+        failed_cases: List[Tuple[MathSolution, GSM8KProblem]],
+        inference_config: InferenceConfig,
+    ) -> PromptConfig:
         """
         Reflect on failures and generate improved prompt.
 
+        Uses instructor to get structured ReflectionOutput - no string parsing.
+
         Args:
-            parent_config: Current prompt configuration (system, cot_prompt, etc.)
-            failed_trajectories: List of (trajectory, instance) pairs that failed
+            parent_config: Current prompt configuration
+            failed_cases: List of (solution, problem) pairs that failed
             inference_config: Sampling parameters for reflection call
 
         Returns:
-            Mutated prompt configuration
+            Mutated prompt configuration (PromptConfig)
+
+        Raises:
+            ValidationError: If LLM doesn't produce valid ReflectionOutput
+            ValueError: If no failed cases provided
         """
-        if not failed_trajectories:
-            # No failures - apply minor random variation
-            return self._random_mutation(parent_config)
+        if not failed_cases:
+            raise ValueError("reflect_and_mutate requires at least one failed case")
 
-        # Format top 3 failures for reflection
-        formatted_failures = []
-        for traj, instance in failed_trajectories[:3]:
-            formatted = self.formatter.format(traj, instance)
-            formatted_failures.append(formatted)
-
-        # Build reflection prompt
+        # Build reflection prompt with top 3 failures
         reflection_prompt = self._build_reflection_prompt(
-            parent_config, formatted_failures
+            parent_config, failed_cases[:3]
         )
 
-        # Call LLM for reflection (use same student model)
-        try:
-            reflection_result = self.student.execute(
-                problem={"question": reflection_prompt},
-                prompt_config={
-                    "system": "You are an expert at improving prompts for math problem solving.",
-                    "cot_prompt": ""
-                },
-                inference_config=inference_config
-            )
+        # Build messages for reflection call
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an expert at improving prompts for math problem solving. "
+                "Analyze failed attempts and suggest specific improvements.",
+            },
+            {"role": "user", "content": reflection_prompt},
+        ]
 
-            # Parse suggestions and apply mutation
-            child_config = self._apply_mutation(
-                parent_config, reflection_result.final_output
-            )
+        # Call LLM with instructor for structured output
+        reflection = self.instructor_client.chat.completions.create(
+            model=self.student.model_name,
+            messages=messages,
+            response_model=ReflectionOutput,  # Automatic Pydantic validation
+            temperature=inference_config.temperature,
+            max_tokens=inference_config.max_tokens,
+        )
 
-            return child_config
+        # Apply improvement to create new config
+        new_config_dict = parent_config.model_dump()
+        if reflection.target == "system":
+            new_config_dict["system"] += f" {reflection.improvement}"
+        else:  # target == "cot"
+            new_config_dict["cot_prompt"] += f" {reflection.improvement}"
 
-        except Exception as e:
-            # Graceful fallback on any error
-            print(f"Warning: Reflection failed ({e}), using random mutation")
-            return self._random_mutation(parent_config)
+        # Return new PromptConfig
+        return PromptConfig(**new_config_dict)
 
     def _build_reflection_prompt(
-        self, parent_config: Dict[str, str], formatted_failures: List[str]
+        self, parent_config: PromptConfig, failed_cases: List[Tuple[MathSolution, GSM8KProblem]]
     ) -> str:
         """
         Build prompt for reflection LLM.
 
         Args:
             parent_config: Current prompt configuration
-            formatted_failures: List of formatted failure descriptions
+            failed_cases: List of (solution, problem) tuples that failed
 
         Returns:
             Reflection prompt asking LLM to analyze and improve
@@ -103,101 +137,33 @@ class ReflectionEngine:
         prompt += "Your goal is to improve the prompts given to the problem solver.\n\n"
 
         prompt += "=== CURRENT SYSTEM PROMPT ===\n"
-        prompt += f"{parent_config.get('system', 'None')}\n\n"
+        prompt += f"{parent_config.system}\n\n"
 
         prompt += "=== CURRENT CHAIN-OF-THOUGHT PROMPT ===\n"
-        prompt += f"{parent_config.get('cot_prompt', 'None')}\n\n"
+        prompt += f"{parent_config.cot_prompt}\n\n"
 
         prompt += "=== FAILED ATTEMPTS ===\n"
-        for i, failure in enumerate(formatted_failures, 1):
-            prompt += f"\n--- Failure {i} ---\n{failure}\n"
+        for i, (solution, problem) in enumerate(failed_cases, 1):
+            prompt += f"\n--- Failure {i} ---\n"
+            prompt += f"Problem: {problem.question}\n\n"
+
+            prompt += "Reasoning:\n"
+            for j, step in enumerate(solution.reasoning_steps, 1):
+                prompt += f"{j}. {step}\n"
+            prompt += "\n"
+
+            prompt += f"Predicted Answer: {solution.final_answer}\n"
+            prompt += f"Expected Answer: {problem.numeric_answer}\n"
 
         prompt += "\n=== YOUR TASK ===\n"
         prompt += "Analyze these failures and suggest ONE specific, actionable improvement "
         prompt += "to either the system prompt or the chain-of-thought prompt. "
         prompt += "Focus on addressing the most common or critical error pattern.\n\n"
-        prompt += "Format your response EXACTLY as follows:\n"
-        prompt += "ANALYSIS: [Brief explanation of what went wrong across these failures]\n"
-        prompt += "IMPROVEMENT: [Specific text to add or modify in the prompt]\n"
-        prompt += "TARGET: [Either 'system' or 'cot' to indicate which prompt to modify]\n"
+
+        prompt += "You must provide your response in a structured format with:\n"
+        prompt += "- analysis: Brief explanation of what went wrong\n"
+        prompt += "- improvement: Specific text to add to the prompt\n"
+        prompt += "- target: Either 'system' or 'cot' to indicate which prompt to modify\n"
 
         return prompt
 
-    def _apply_mutation(
-        self, parent_config: Dict[str, str], reflection_output: str
-    ) -> Dict[str, str]:
-        """
-        Parse reflection output and apply mutation.
-
-        Args:
-            parent_config: Current prompt configuration
-            reflection_output: LLM's reflection response
-
-        Returns:
-            Mutated prompt configuration
-        """
-        child_config = parent_config.copy()
-
-        try:
-            # Extract structured sections
-            lines = reflection_output.strip().split('\n')
-            analysis = ""
-            improvement = ""
-            target = "cot"  # Default to CoT prompt
-
-            for line in lines:
-                line = line.strip()
-                if line.startswith("ANALYSIS:"):
-                    analysis = line.replace("ANALYSIS:", "").strip()
-                elif line.startswith("IMPROVEMENT:"):
-                    improvement = line.replace("IMPROVEMENT:", "").strip()
-                elif line.startswith("TARGET:"):
-                    target_str = line.replace("TARGET:", "").strip().lower()
-                    if "system" in target_str:
-                        target = "system"
-                    else:
-                        target = "cot"
-
-            # Apply improvement if we successfully extracted it
-            if improvement:
-                if target == "system":
-                    child_config["system"] = parent_config.get("system", "") + " " + improvement
-                else:
-                    child_config["cot_prompt"] = parent_config.get("cot_prompt", "") + " " + improvement
-
-                return child_config
-            else:
-                # Parsing failed - use fallback
-                return self._random_mutation(parent_config)
-
-        except Exception:
-            # Any parsing error - use fallback
-            return self._random_mutation(parent_config)
-
-    def _random_mutation(self, parent_config: Dict[str, str]) -> Dict[str, str]:
-        """
-        Apply random mutation as fallback.
-
-        Args:
-            parent_config: Current prompt configuration
-
-        Returns:
-            Randomly mutated configuration
-        """
-        child_config = parent_config.copy()
-
-        variations = [
-            "Focus on identifying the key numbers and operations.",
-            "Break down the problem into smaller, manageable steps.",
-            "Double-check your arithmetic at each step.",
-            "Make sure to show all intermediate calculations clearly.",
-            "Verify your final answer makes sense in the context of the problem.",
-            "Pay careful attention to units and what the question is asking for.",
-            "Consider whether you need to add, subtract, multiply, or divide at each step.",
-            "Read the problem carefully to identify all relevant information.",
-        ]
-
-        hint = random.choice(variations)
-        child_config["cot_prompt"] = parent_config.get("cot_prompt", "") + f" {hint}"
-
-        return child_config

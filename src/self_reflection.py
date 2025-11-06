@@ -9,23 +9,23 @@ continuous improvement through reflection.
 
 import time
 import random
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
 from dataclasses import dataclass
 
 from .core import (
-    AgentTrajectory,
     StudentModel,
     TaskEvaluator,
     TrajectoryFormatter,
     EvaluationResult
 )
+from .types import GSM8KProblem, MathSolution, PromptConfig, InferenceConfig
 from .reflection import ReflectionEngine
 
 
 @dataclass
 class PromptCandidate:
     """A prompt configuration with its observed performance."""
-    prompt_config: Dict[str, str]
+    prompt_config: PromptConfig
     probe_accuracy: float
     iteration: int
 
@@ -34,13 +34,13 @@ def run_self_reflection(
     student: StudentModel,
     evaluator: TaskEvaluator,
     formatter: TrajectoryFormatter,
-    probe_set: List[Dict],
-    inference_config: Dict[str, Any],
+    probe_set: List[GSM8KProblem],
+    inference_config: InferenceConfig,
     time_budget_s: float = 300,
     batch_size: int = 8,
     self_consistency_k: int = 8,
     verbose: bool = True
-) -> Dict[str, Any]:
+) -> Tuple[PromptConfig, Dict[str, Any]]:
     """
     Run self-reflection optimization.
 
@@ -60,8 +60,7 @@ def run_self_reflection(
         verbose: Whether to print progress
 
     Returns:
-        Dictionary with results:
-            - best_prompt_config: Best prompt found
+        Tuple of (best_prompt_config, metrics_dict) where metrics_dict contains:
             - best_accuracy: Accuracy on probe set
             - iterations: Number of iterations
             - total_inference_calls: Total inference calls
@@ -74,10 +73,10 @@ def run_self_reflection(
     reflection_engine = ReflectionEngine(student, formatter)
 
     # Seed prompt (simple baseline)
-    seed_config = {
-        "system": "You are an expert at solving math word problems.",
-        "cot_prompt": "Let's solve this step by step, showing all calculations clearly."
-    }
+    seed_config = PromptConfig(
+        system="You are an expert at solving math word problems.",
+        cot_prompt="Let's solve this step by step, showing all calculations clearly."
+    )
 
     # Track history
     history: List[PromptCandidate] = []
@@ -114,35 +113,33 @@ def run_self_reflection(
 
         # Evaluate current prompt on batch
         batch_results: List[EvaluationResult] = []
-        batch_trajectories: List[List[AgentTrajectory]] = []
+        batch_solutions: List[List[MathSolution]] = []
 
         for instance in batch:
             if self_consistency_k > 1:
                 # Self-consistency sampling
-                trajs = student.execute_with_self_consistency(
+                solutions = student.execute_with_self_consistency(
                     problem=instance,
                     prompt_config=current_config,
                     inference_config=inference_config,
                     k=self_consistency_k
                 )
-                batch_trajectories.append(trajs)
+                batch_solutions.append(solutions)
                 total_inference_calls += self_consistency_k
 
-                # Evaluate all trajectories and vote
-                results = [evaluator.evaluate(t, instance) for t in trajs]
-                # Pick most common result
-                result = max(results, key=lambda r: sum(rr.success == r.success for rr in results))
+                # Evaluate with self-consistency
+                result = evaluator.evaluate_with_self_consistency(solutions, instance)
             else:
-                # Single trajectory
-                traj = student.execute(
+                # Single solution
+                solution = student.execute(
                     problem=instance,
                     prompt_config=current_config,
                     inference_config=inference_config
                 )
-                batch_trajectories.append([traj])
+                batch_solutions.append([solution])
                 total_inference_calls += 1
 
-                result = evaluator.evaluate(traj, instance)
+                result = evaluator.evaluate(solution, instance)
 
             batch_results.append(result)
 
@@ -155,7 +152,7 @@ def run_self_reflection(
 
         # Track this candidate
         candidate = PromptCandidate(
-            prompt_config=current_config.copy(),
+            prompt_config=current_config,
             probe_accuracy=accuracy,
             iteration=iteration
         )
@@ -164,20 +161,20 @@ def run_self_reflection(
         # Update best if improved
         if accuracy > best_accuracy:
             best_accuracy = accuracy
-            best_config = current_config.copy()
+            best_config = current_config
             if verbose:
                 print(f"✓ New best accuracy: {best_accuracy:.2%}")
 
         # Collect failures for reflection
-        failed_trajectories = []
+        failed_cases = []
         for i, result in enumerate(batch_results):
             if not result.success:
-                # Take first trajectory from self-consistency samples
-                traj = batch_trajectories[i][0]
-                failed_trajectories.append((traj, batch[i]))
+                # Take first solution from self-consistency samples
+                solution = batch_solutions[i][0]
+                failed_cases.append((solution, batch[i]))
 
         if verbose:
-            print(f"Failures: {len(failed_trajectories)}/{len(batch_results)}")
+            print(f"Failures: {len(failed_cases)}/{len(batch_results)}")
 
         # Check time before reflection (reflection adds cost)
         if (time.time() - start_time) >= time_budget_s:
@@ -191,7 +188,7 @@ def run_self_reflection(
 
         next_config = reflection_engine.reflect_and_mutate(
             parent_config=current_config,
-            failed_trajectories=failed_trajectories,
+            failed_cases=failed_cases,
             inference_config=inference_config
         )
         total_inference_calls += 1  # One reflection call
@@ -216,11 +213,12 @@ def run_self_reflection(
         print(f"Best accuracy: {best_accuracy:.2%}")
         print("=" * 80 + "\n")
 
-    return {
-        "best_prompt_config": best_config,
+    metrics = {
         "best_accuracy": best_accuracy,
         "iterations": iteration,
         "total_inference_calls": total_inference_calls,
         "wall_time": wall_time,
         "history": history
     }
+
+    return best_config, metrics

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Any, Tuple
 
 from .core import StudentModel, TaskEvaluator, TrajectoryFormatter
+from .types import GSM8KProblem, MathSolution, PromptConfig, InferenceConfig
 from .gepa_baseline import gepa_baseline, Candidate
 from .gepa_mi import gepa_mi
 from .self_reflection import run_self_reflection
@@ -36,9 +37,9 @@ class BenchmarkResult:
 def evaluate_on_split(
     student: StudentModel,
     evaluator: TaskEvaluator,
-    prompt_config: Dict[str, str],
-    split: List[Dict],
-    inference_config: Dict[str, Any],
+    prompt_config: PromptConfig,
+    split: List[GSM8KProblem],
+    inference_config: InferenceConfig,
     self_consistency_k: int,
 ) -> float:
     """Evaluate prompt config on split.
@@ -57,17 +58,13 @@ def evaluate_on_split(
     correct = 0
     for instance in split:
         if self_consistency_k > 1:
-            trajs = student.execute_with_self_consistency(
+            solutions = student.execute_with_self_consistency(
                 instance, prompt_config, inference_config, self_consistency_k
             )
-            results = [evaluator.evaluate(t, instance) for t in trajs]
-            # Majority vote
-            result = max(
-                results, key=lambda r: sum(rr.success == r.success for rr in results)
-            )
+            result = evaluator.evaluate_with_self_consistency(solutions, instance)
         else:
-            traj = student.execute(instance, prompt_config, inference_config)
-            result = evaluator.evaluate(traj, instance)
+            solution = student.execute(instance, prompt_config, inference_config)
+            result = evaluator.evaluate(solution, instance)
 
         if result.success:
             correct += 1
@@ -96,10 +93,10 @@ def run_cost_aware_benchmark(
     student: StudentModel,
     evaluator: TaskEvaluator,
     formatter: TrajectoryFormatter,
-    probe_set: List[Dict],
-    val_set: List[Dict],
-    test_set: List[Dict],
-    inference_config: Dict[str, Any],
+    probe_set: List[GSM8KProblem],
+    val_set: List[GSM8KProblem],
+    test_set: List[GSM8KProblem],
+    inference_config: InferenceConfig,
     time_budget_s: float = 300,
     batch_size: int = 8,
     self_consistency_k: int = 8,
@@ -115,10 +112,10 @@ def run_cost_aware_benchmark(
         student: Student model
         evaluator: Task evaluator
         formatter: Trajectory formatter
-        probe_set: Probe set for minibatch sampling
-        val_set: Validation set (should be LARGE: 300-800 for GSM8K)
-        test_set: Test set for final evaluation
-        inference_config: Sampling parameters
+        probe_set: Probe set for minibatch sampling (List[GSM8KProblem])
+        val_set: Validation set (should be LARGE: 300-800 for GSM8K) (List[GSM8KProblem])
+        test_set: Test set for final evaluation (List[GSM8KProblem])
+        inference_config: Typed inference configuration (InferenceConfig)
         time_budget_s: Time budget per method
         batch_size: Minibatch size
         self_consistency_k: Self-consistency samples (should be ≥5 for speedup)
@@ -279,7 +276,7 @@ def run_cost_aware_benchmark(
         print(">" * 80 + "\n")
 
     t0 = time.time()
-    sr_result_dict = run_self_reflection(
+    best_sr_config, sr_metrics = run_self_reflection(
         student=student,
         evaluator=evaluator,
         formatter=formatter,
@@ -296,7 +293,7 @@ def run_cost_aware_benchmark(
     test_acc_sr = evaluate_on_split(
         student,
         evaluator,
-        sr_result_dict["best_prompt_config"],
+        best_sr_config,
         test_set,
         inference_config,
         self_consistency_k,
@@ -305,14 +302,14 @@ def run_cost_aware_benchmark(
     sr_result = BenchmarkResult(
         method="Self-Reflection",
         wall_time=t_sr,
-        pool_size=len(sr_result_dict["history"]),  # Number of prompts tried
-        total_inference_calls=sr_result_dict["total_inference_calls"],
+        pool_size=len(sr_metrics["history"]),  # Number of prompts tried
+        total_inference_calls=sr_metrics["total_inference_calls"],
         total_validation_calls=0,  # No validation set used
         avg_probes_per_candidate=0,  # Not applicable
         speedup=0,  # Not applicable (no validation)
         final_accuracy=test_acc_sr,
-        iterations=sr_result_dict["iterations"],
-        accepted_candidates=sr_result_dict["iterations"],  # All iterations accepted
+        iterations=sr_metrics["iterations"],
+        accepted_candidates=sr_metrics["iterations"],  # All iterations accepted
     )
 
     # ============================================================

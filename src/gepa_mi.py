@@ -8,17 +8,18 @@ import time
 import random
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Any, Tuple
+from typing import Dict, List, Set, Tuple
 
 from .core import StudentModel, TaskEvaluator, TrajectoryFormatter
 from .reflection import ReflectionEngine
+from .types import GSM8KProblem, MathSolution, PromptConfig, InferenceConfig
 
 
 @dataclass
 class Candidate:
     """A candidate prompt configuration."""
 
-    prompt_config: Dict[str, str]  # Module name -> text
+    prompt_config: PromptConfig
     creation_time: float = field(default_factory=time.time)
     wins: Set[int] = field(default_factory=set)  # Indices where this wins
     total_score: float = 0.0  # Sum of scores across all instances
@@ -103,12 +104,12 @@ def selective_validate(
     student: StudentModel,
     evaluator: TaskEvaluator,
     child: Candidate,
-    val_set: List[Dict],
+    val_set: List[GSM8KProblem],
     best_scores: Dict[int, float],
     scores_dict: Dict,
     delta: float,
     max_probes: int,
-    inference_config: Dict[str, Any],
+    inference_config: InferenceConfig,
     self_consistency_k: int,
     minibatch_acc: float,
     verbose: bool = False,
@@ -161,23 +162,20 @@ def selective_validate(
             break
 
         # Evaluate on selected instance
-        instance = val_set[idx]
+        problem = val_set[idx]
 
         if self_consistency_k > 1:
-            trajectories = student.execute_with_self_consistency(
-                instance,
+            solutions = student.execute_with_self_consistency(
+                problem,
                 child.prompt_config,
                 inference_config,
                 self_consistency_k,
             )
-            results = [evaluator.evaluate(t, instance) for t in trajectories]
-            result = max(
-                results,
-                key=lambda r: sum(rr.success == r.success for rr in results),
-            )
+            # Use rigorous self-consistency: vote on extracted answers
+            result = evaluator.evaluate_with_self_consistency(solutions, problem)
         else:
-            traj = student.execute(instance, child.prompt_config, inference_config)
-            result = evaluator.evaluate(traj, instance)
+            solution = student.execute(problem, child.prompt_config, inference_config)
+            result = evaluator.evaluate(solution, problem)
 
         score = result.score
         best_score = best_scores.get(idx, 0.0)
@@ -217,11 +215,11 @@ def gepa_mi(
     student: StudentModel,
     evaluator: TaskEvaluator,
     formatter: TrajectoryFormatter,
-    probe_set: List[Dict],
-    val_set: List[Dict],
+    probe_set: List[GSM8KProblem],
+    val_set: List[GSM8KProblem],
     time_budget_s: float,
     batch_size: int,
-    inference_config: Dict[str, Any],
+    inference_config: InferenceConfig,
     delta_init: float = 0.05,
     delta_final: float = 0.02,
     max_probes: int = 10,
@@ -273,10 +271,10 @@ def gepa_mi(
         print("=" * 80 + "\n")
 
     # Initialize
-    seed_config = {
-        "system": "You are a helpful math tutor.",
-        "cot_prompt": "Let's solve this step by step:",
-    }
+    seed_config = PromptConfig(
+        system="You are a helpful math tutor.",
+        cot_prompt="Let's solve this step by step:"
+    )
 
     P = [Candidate(prompt_config=seed_config)]
     BestScores = {i: 0.0 for i in range(len(val_set))}
@@ -305,19 +303,16 @@ def gepa_mi(
         batch = random.sample(probe_set, min(batch_size, len(probe_set)))
 
         batch_results = []
-        for instance in batch:
+        for problem in batch:
             if self_consistency_k > 1:
-                trajectories = student.execute_with_self_consistency(
-                    instance, parent.prompt_config, inference_config, self_consistency_k
+                solutions = student.execute_with_self_consistency(
+                    problem, parent.prompt_config, inference_config, self_consistency_k
                 )
-                results = [evaluator.evaluate(t, instance) for t in trajectories]
-                result = max(
-                    results,
-                    key=lambda r: sum(rr.success == r.success for rr in results),
-                )
+                # Use rigorous self-consistency: vote on extracted answers
+                result = evaluator.evaluate_with_self_consistency(solutions, problem)
             else:
-                traj = student.execute(instance, parent.prompt_config, inference_config)
-                result = evaluator.evaluate(traj, instance)
+                solution = student.execute(problem, parent.prompt_config, inference_config)
+                result = evaluator.evaluate(solution, problem)
 
             batch_results.append(result)
 
@@ -326,22 +321,26 @@ def gepa_mi(
         # (3) Reflect and mutate
         if use_reflection and reflection_engine:
             # Collect failures for reflection
-            failed_trajectories = []
+            failed_cases = []
             for i, result in enumerate(batch_results):
                 if not result.success:
-                    # Use first trajectory if self-consistency was used
-                    traj = result.trajectory
-                    failed_trajectories.append((traj, batch[i]))
+                    # Get the solution that failed
+                    if self_consistency_k > 1:
+                        # For self-consistency, get first solution
+                        solution = student.execute(batch[i], parent.prompt_config, inference_config)
+                    else:
+                        # Single solution case - need to re-execute to get solution object
+                        solution = student.execute(batch[i], parent.prompt_config, inference_config)
+                    failed_cases.append((solution, batch[i]))
 
             # Use ReflectionEngine to generate mutation
             child_config = reflection_engine.reflect_and_mutate(
                 parent_config=parent.prompt_config,
-                failed_trajectories=failed_trajectories,
+                failed_cases=failed_cases,
                 inference_config=inference_config
             )
         else:
             # Fallback: random hint mutation
-            child_config = parent.prompt_config.copy()
             variations = [
                 "Focus on identifying the key numbers and operations.",
                 "Break down the problem into smaller steps.",
@@ -350,28 +349,28 @@ def gepa_mi(
                 "Verify your answer makes sense in the context.",
             ]
             hint = random.choice(variations)
-            child_config["cot_prompt"] = parent.prompt_config["cot_prompt"] + f" {hint}"
+            child_config = PromptConfig(
+                system=parent.prompt_config.system,
+                cot_prompt=parent.prompt_config.cot_prompt + f" {hint}"
+            )
 
         child = Candidate(prompt_config=child_config)
 
         # (4) Quick check
         batch_results_child = []
-        for instance in batch:
+        for problem in batch:
             if self_consistency_k > 1:
-                trajectories = student.execute_with_self_consistency(
-                    instance,
+                solutions = student.execute_with_self_consistency(
+                    problem,
                     child.prompt_config,
                     inference_config,
                     self_consistency_k,
                 )
-                results = [evaluator.evaluate(t, instance) for t in trajectories]
-                result = max(
-                    results,
-                    key=lambda r: sum(rr.success == r.success for rr in results),
-                )
+                # Use rigorous self-consistency: vote on extracted answers
+                result = evaluator.evaluate_with_self_consistency(solutions, problem)
             else:
-                traj = student.execute(instance, child.prompt_config, inference_config)
-                result = evaluator.evaluate(traj, instance)
+                solution = student.execute(problem, child.prompt_config, inference_config)
+                result = evaluator.evaluate(solution, problem)
 
             batch_results_child.append(result)
 

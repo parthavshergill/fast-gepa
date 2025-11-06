@@ -4,9 +4,13 @@ scipy>=1.10.0
 datasets>=2.14.0
 tqdm>=4.65.0
 
-# LLM APIs
+# Type system and validation
+pydantic>=2.0.0
+
+# LLM APIs with structured outputs
 openai>=1.0.0
 google-generativeai>=0.3.0
+instructor>=1.0.0
 python-dotenv>=1.0.0
 
 # Optional: For local models

@@ -298,49 +298,56 @@ delta = delta_init + (delta_final - delta_init) * progress
 
 ---
 
-## 7. ⚠️ **Answer Extraction: Heuristic-Based**
+## 7. ✅ **Strict Type System: No More Heuristic Parsing**
 
 ### Location
-- `src/gsm8k_components.py:67-83`
+- `src/types.py` - All Pydantic models
+- `src/gsm8k_components.py` - Uses structured outputs via instructor
 
-### What I Implemented
+### What Is Implemented
+
+**Pydantic Models for Everything:**
 ```python
-def _extract_answer(self, text):
-    if "####" in text:
-        return text.split("####")[-1].strip()
+class GSM8KProblem(BaseModel):
+    question: str
+    answer: str
 
-    # Fallback: extract last number
-    numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
-    return numbers[-1] if numbers else text.strip()
+    @property
+    def numeric_answer(self) -> float:
+        # Single source of truth for answer parsing
 
-def _normalize(self, answer):
-    cleaned = re.sub(r"[^\d\.\-]", "", answer)
-    try:
-        num = float(cleaned)
-        if num.is_integer():
-            return str(int(num))
-        return str(num)
-    except:
-        return cleaned
+class MathSolution(BaseModel):
+    reasoning_steps: List[str]
+    final_answer: float  # LLM must output structured number
+    confidence: float = 1.0
+
+class InferenceConfig(BaseModel):
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=256, ge=1, le=4096)
+    top_p: float = Field(default=0.9, ge=0.0, le=1.0)
 ```
 
-**Issues:**
-1. **GSM8K format assumption:** Expects `####` delimiter
-   - True for GSM8K training data
-   - May not hold if model deviates from format
+**Instructor for Structured Outputs:**
+- All LLM outputs validated against Pydantic schemas
+- No string parsing, regex extraction, or normalization heuristics
+- Validation errors fail fast (no silent fallbacks)
 
-2. **Fallback assumes last number is answer**
-   - Could be wrong if model includes clarifications
-   - Example: "The answer is 42, but let me verify: 42 * 2 = 84"
+**Endpoint Configuration:**
+- Environment variables: `OPENAI_BASE_URL`, `GEMINI_ENDPOINT`
+- Support for Azure OpenAI and custom endpoints
+- Documented in README and .env.example
 
-3. **No unit handling:** Ignores units (dollars, apples, etc.)
-   - Works for GSM8K (answers are just numbers)
-   - Would fail on tasks requiring unit matching
+**Benefits:**
+1. ✅ Type safety throughout codebase
+2. ✅ No heuristic parsing failures
+3. ✅ Validation errors surface immediately
+4. ✅ Easy to extend with new fields
+5. ✅ Self-documenting schemas
 
 **Impact:**
-- Works well for GSM8K (>95% of cases)
-- May occasionally misparse creative formats
-- Good enough for benchmarking
+- Eliminates entire class of parsing bugs
+- Makes LLM outputs predictable and testable
+- Follows CLAUDE_CONTRACTS.md strictly
 
 ---
 
@@ -533,7 +540,8 @@ Added as third method in benchmarking:
 | Uncertainty Sampling | ✅ Correct | None | ✅ Done |
 | Pareto Pruning | ⚠️ Missing | Medium (efficiency) | 🟡 Medium |
 | Early Stopping | ✅ Correct | None | ✅ Done |
-| Answer Extraction | ⚠️ Heuristic | Low (works for GSM8K) | 🟢 Low |
+| Strict Type System | ✅ Complete | None (eliminates parsing bugs) | ✅ Done |
+| Endpoint Configuration | ✅ Complete | None (supports custom endpoints) | ✅ Done |
 | Cost Tracking | ⚠️ Approximate | Low (slight overestimate) | 🟢 Low |
 | Periodic Re-validation | ❌ Missing | Medium (pool quality) | 🟡 Medium |
 

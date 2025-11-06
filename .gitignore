@@ -31,3 +31,7 @@ results/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# External datasets (not committed)
+ARC-AGI-2/
+spider2-lite/

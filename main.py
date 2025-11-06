@@ -41,7 +41,8 @@ def main():
         "--api-key",
         type=str,
         default=None,
-        help="API key (or set OPENAI_API_KEY or GEMINI_API_KEY env var)",
+        help="API key (or set OPENAI_API_KEY or GEMINI_API_KEY env var). "
+             "For custom endpoints, set OPENAI_BASE_URL or GEMINI_ENDPOINT.",
     )
     parser.add_argument(
         "--model",
@@ -135,16 +136,19 @@ def main():
     print(f"✓ Evaluator: GSM8KEvaluator")
     print(f"✓ Formatter: GSM8KFormatter")
 
-    # Inference config
-    inference_config = {
-        "temperature": 0.7,
-        "max_new_tokens": 256,
-        "top_p": 0.9,
-    }
+    # Inference config - using typed InferenceConfig
+    from src.types import InferenceConfig
+
+    inference_config = InferenceConfig(
+        temperature=0.7,
+        max_tokens=256,
+        top_p=0.9
+    )
 
     print(f"\nInference config:")
-    for key, value in inference_config.items():
-        print(f"  {key}: {value}")
+    print(f"  temperature: {inference_config.temperature}")
+    print(f"  max_tokens: {inference_config.max_tokens}")
+    print(f"  top_p: {inference_config.top_p}")
 
     # Run benchmark
     print("\n" + "=" * 80)
