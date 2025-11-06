@@ -1,8 +1,8 @@
 """Main entry point for GEPA/GEPA-MI/Self-Reflection experiments.
 
 Usage:
-    python main.py --mode quick    # Quick test run
-    python main.py --mode full     # Full benchmark
+    python main.py --mode quick --task gsm8k    # Quick test run on GSM8K
+    python main.py --mode full --task arc       # Full benchmark on ARC
 """
 
 import os
@@ -11,13 +11,47 @@ import time
 from dotenv import load_dotenv
 
 from src.gsm8k_components import (
-    GSM8KFormatter,
-    GSM8KEvaluator,
     OpenAIStudentModel,
     GeminiStudentModel,
 )
-from src.data_utils import load_gsm8k_splits, verify_data_quality
 from src.benchmark import run_cost_aware_benchmark
+
+
+def load_task_data(task_name, config, seed):
+    """Load task-specific data and components.
+
+    Returns:
+        tuple: (probe_set, val_set, test_set, evaluator, formatter)
+    """
+    if task_name == "gsm8k":
+        from src.data_utils import load_gsm8k_splits, verify_data_quality
+        from src.gsm8k_components import GSM8KEvaluator, GSM8KFormatter
+
+        probe, val, test = load_gsm8k_splits(
+            probe_size=config["probe_size"],
+            val_size=config["val_size"],
+            test_size=config["test_size"],
+            seed=seed,
+        )
+        verify_data_quality(probe, val, test)
+        evaluator = GSM8KEvaluator()
+        formatter = GSM8KFormatter()
+
+    elif task_name == "arc":
+        from src.arc_data_utils import load_arc_splits, verify_arc_data_quality
+        from src.arc_components import ARCEvaluator, ARCFormatter
+
+        probe, val, test = load_arc_splits(
+            probe_size=config["probe_size"],
+            val_size=config["val_size"],
+            test_size=config["test_size"],
+            seed=seed,
+        )
+        verify_arc_data_quality(probe, val, test)
+        evaluator = ARCEvaluator()
+        formatter = ARCFormatter()
+
+    return probe, val, test, evaluator, formatter
 
 
 def main():
@@ -29,6 +63,13 @@ def main():
         choices=["quick", "full"],
         default="quick",
         help="Experiment mode: 'quick' for fast validation, 'full' for complete benchmark",
+    )
+    parser.add_argument(
+        "--task",
+        type=str,
+        choices=["gsm8k", "arc"],
+        default="gsm8k",
+        help="Task: 'gsm8k' (math) or 'arc' (abstract reasoning)",
     )
     parser.add_argument(
         "--provider",
@@ -64,7 +105,7 @@ def main():
 
     # Configuration based on mode
     if args.mode == "quick":
-        print("\n🚀 QUICK MODE: Fast validation run")
+        print(f"\n🚀 QUICK MODE: Fast validation run ({args.task.upper()})")
         config = {
             "probe_size": 50,
             "val_size": 100,  # Smaller for quick test
@@ -77,7 +118,7 @@ def main():
             "delta_final": 0.05,
         }
     else:  # full
-        print("\n🔬 FULL MODE: Complete benchmark")
+        print(f"\n🔬 FULL MODE: Complete benchmark ({args.task.upper()})")
         config = {
             "probe_size": 200,
             "val_size": 600,  # LARGE validation set for speedup
@@ -90,23 +131,29 @@ def main():
             "delta_final": 0.02,
         }
 
+    # Adjust config for ARC task (harder, needs more samples)
+    if args.task == "arc" and args.mode == "quick":
+        config.update({
+            "probe_size": 20,
+            "val_size": 50,
+            "test_size": 20,
+            "self_consistency_k": 2,
+        })
+
     print("\nConfiguration:")
     for key, value in config.items():
         print(f"  {key}: {value}")
 
     # Load data
     print("\n" + "=" * 80)
-    print("LOADING DATA")
+    print(f"LOADING DATA ({args.task.upper()})")
     print("=" * 80)
 
-    probe_set, val_set, test_set = load_gsm8k_splits(
-        probe_size=config["probe_size"],
-        val_size=config["val_size"],
-        test_size=config["test_size"],
+    probe_set, val_set, test_set, evaluator, formatter = load_task_data(
+        task_name=args.task,
+        config=config,
         seed=args.seed,
     )
-
-    verify_data_quality(probe_set, val_set, test_set)
 
     # Initialize components
     print("\n" + "=" * 80)
@@ -128,22 +175,28 @@ def main():
     else:  # gemini
         student = GeminiStudentModel(model_name=model_name, api_key=args.api_key)
 
-    evaluator = GSM8KEvaluator()
-    formatter = GSM8KFormatter()
-
     print(f"✓ Provider: {args.provider}")
     print(f"✓ Student model: {model_name}")
-    print(f"✓ Evaluator: GSM8KEvaluator")
-    print(f"✓ Formatter: GSM8KFormatter")
+    print(f"✓ Task: {args.task}")
+    print(f"✓ Evaluator: {type(evaluator).__name__}")
+    print(f"✓ Formatter: {type(formatter).__name__}")
 
     # Inference config - using typed InferenceConfig
     from src.types import InferenceConfig
 
-    inference_config = InferenceConfig(
-        temperature=0.7,
-        max_tokens=256,
-        top_p=0.9
-    )
+    # ARC needs more tokens for grid representations
+    if args.task == "arc":
+        inference_config = InferenceConfig(
+            temperature=0.7,
+            max_tokens=2048,  # Grids need more space
+            top_p=0.9
+        )
+    else:
+        inference_config = InferenceConfig(
+            temperature=0.7,
+            max_tokens=256,
+            top_p=0.9
+        )
 
     print(f"\nInference config:")
     print(f"  temperature: {inference_config.temperature}")
@@ -183,12 +236,13 @@ def main():
 
     os.makedirs("results", exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    results_file = f"results/experiment_{args.mode}_{timestamp}.txt"
+    results_file = f"results/experiment_{args.task}_{args.mode}_{timestamp}.txt"
 
     with open(results_file, "w") as f:
         f.write("GEPA vs GEPA-MI vs Self-Reflection Experimental Results\n")
         f.write("=" * 80 + "\n\n")
 
+        f.write(f"Task: {args.task}\n")
         f.write(f"Mode: {args.mode}\n")
         f.write(f"Provider: {args.provider}\n")
         f.write(f"Model: {model_name}\n")
