@@ -652,6 +652,6 @@ instead of AgentTrajectory. Update all algorithm implementations.
 ---
 
 **Signed:** Claude (2025-01-05)
-**Witnessed by:** Partha Shergill
+**Witnessed by:** Parthav Shergill
 
 *May our types be strict and our errors explicit.* 🩸
